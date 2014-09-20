@@ -23,6 +23,7 @@ import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.base.Strings;
 import com.google.common.collect.Collections2;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.UsernamePasswordCredentials;
@@ -174,24 +175,31 @@ public class WebDavRepository implements Repository {
                     return getLastModified(o1).compareTo(getLastModified(o2));
                 }
             });
-            removeOldLockFiles(lockFiles);
+            MultiStatusResponse myself = Iterables.find(lockFiles, new Predicate<MultiStatusResponse>() {
+                @Override
+                public boolean apply(MultiStatusResponse input) {
+                    return input.getHref().contains(clientId.toString());
+                }
+            });
+            removeOldLockFiles(lockFiles, getLastModified(myself).getTime());
             if (lockFiles.isEmpty()) {
                 throw new IllegalStateException("expected there to be lock-files");
             }
-            if (lockFiles.get(0).getHref().contains(clientId.toString())) {
+            if (lockFiles.get(0) == myself) {
                 LOGGER.info("{} now on top", lockFileName);
                 return;
             } else {
+                LOGGER.info("{} on top", lockFiles.get(0).getHref());
                 Thread.sleep(1000);
             }
         }
     }
 
-    private void removeOldLockFiles(List<MultiStatusResponse> lockFiles) throws IOException {
+    private void removeOldLockFiles(List<MultiStatusResponse> lockFiles, long reference) throws IOException {
         Iterator<MultiStatusResponse> iterator = lockFiles.iterator();
         while (iterator.hasNext()) {
             MultiStatusResponse next = iterator.next();
-            if (isOlderThan(next, 10000)) {
+            if (isOlderThan(next, 10000, reference)) {
                 client.executeMethod(new DeleteMethod(config.getBaseUrl() + lockFiles.get(0).getHref()));
                 iterator.remove();
             } else {
@@ -200,8 +208,8 @@ public class WebDavRepository implements Repository {
         }
     }
 
-    private boolean isOlderThan(MultiStatusResponse next, int millis) {
-        Date millisAgo = new Date(new Date().getTime() - millis);
+    private boolean isOlderThan(MultiStatusResponse next, int millis, long referenceTime) {
+        Date millisAgo = new Date(referenceTime - millis);
         return getLastModified(next).before(millisAgo);
     }
 
