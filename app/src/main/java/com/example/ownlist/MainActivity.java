@@ -60,7 +60,7 @@ public class MainActivity extends Activity {
         String username = sharedPrefs.getString("server_user", "");
         String password = sharedPrefs.getString("server_password", "");
         WebDavConfiguration config = WebDavConfiguration.builder(host, directoryPath)
-                //.usingSSL()
+                .usingSSL()
                 .customPort(port)
                 .credentials(username, password)
                 .build();
