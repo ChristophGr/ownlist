@@ -56,6 +56,7 @@ public class ListRepository {
             return;
         }
         repository.lock(name);
+        LOGGER.info("refreshing content before adding {}", entry);
         doRefresh();
         content.addAll(entry);
         repository.upload(name, toStringList(content));
@@ -67,6 +68,7 @@ public class ListRepository {
             return;
         }
         repository.lock(name);
+        LOGGER.info("refreshing content before removing {}", entry);
         doRefresh();
         content.removeAll(entry);
         repository.upload(name, toStringList(content));
@@ -79,6 +81,7 @@ public class ListRepository {
 
     private void doRefresh() throws IOException {
         content = fromStringList(repository.download(name));
+        LOGGER.info("refreshed content {}", content);
     }
 
     private List<CheckItem> fromStringList(List<String> download) {
