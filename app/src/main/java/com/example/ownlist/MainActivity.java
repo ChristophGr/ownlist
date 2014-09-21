@@ -236,9 +236,7 @@ public class MainActivity extends Activity {
             new Thread() {
                 @Override
                 public void run() {
-                    source.remove(checkItem);
-                    CheckItem changed = checkItem.toggleChecked();
-                    source.add(changed);
+                    source.add(checkItem.toggleChecked());
                     doNotifyDataSetChanged();
                 }
             }.start();

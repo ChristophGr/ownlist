@@ -27,6 +27,7 @@ import org.junit.Rule;
 import org.junit.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.*;
@@ -54,7 +55,7 @@ public class ListRepositoryTest {
             inSequence(sequence);
         }});
         ListRepository list = new ListRepository("foo", repository);
-        list.add(Arrays.asList(new CheckItem("bar")));
+        list.change(Arrays.asList(new CheckItem("bar")), Collections.<CheckItem>emptyList());
 
         assertThat(list.getContent(), contains(new CheckItem("bar")));
     }
@@ -74,7 +75,7 @@ public class ListRepositoryTest {
             inSequence(sequence);
         }});
         ListRepository list = new ListRepository("foo", repository);
-        list.add(Arrays.asList(new CheckItem("bar")));
+        list.change(Arrays.asList(new CheckItem("bar")), Collections.<CheckItem>emptyList());
 
         assertThat(list.getContent(), contains(new CheckItem("bar2"), new CheckItem("bar")));
     }

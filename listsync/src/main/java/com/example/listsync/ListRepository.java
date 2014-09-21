@@ -19,9 +19,8 @@
 
 package com.example.listsync;
 
-import com.google.common.base.Function;
-import com.google.common.base.Functions;
-import com.google.common.base.Predicates;
+import com.google.common.base.*;
+import com.google.common.collect.Collections2;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
@@ -31,6 +30,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.ListIterator;
 
 public class ListRepository {
 
@@ -51,26 +51,15 @@ public class ListRepository {
         this.content = content;
     }
 
-    public synchronized void add(final Collection<CheckItem> entry) throws IOException {
-        if (entry.isEmpty()) {
+    public synchronized void change(Collection<CheckItem> added, Collection<CheckItem> removed) throws IOException {
+        if (added.isEmpty() && removed.isEmpty()) {
             return;
         }
         repository.lock(name);
-        LOGGER.info("refreshing content before adding {}", entry);
+        LOGGER.info("refreshing content before adding {} and removing {}", added, removed);
         doRefresh();
-        content.addAll(entry);
-        repository.upload(name, toStringList(content));
-        repository.unlock(name);
-    }
-
-    public synchronized void remove(final Collection<CheckItem> entry) throws IOException {
-        if (entry.isEmpty()) {
-            return;
-        }
-        repository.lock(name);
-        LOGGER.info("refreshing content before removing {}", entry);
-        doRefresh();
-        content.removeAll(entry);
+        content.addAll(added);
+        content.removeAll(removed);
         repository.upload(name, toStringList(content));
         repository.unlock(name);
     }

@@ -27,6 +27,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Properties;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -51,18 +52,18 @@ public class WebDAVUT {
         ListRepository foo = new ListRepository("foo", client1);
         final ListRepository fooRemote = new ListRepository("foo", slowClient);
 
-        foo.add(Arrays.asList(new CheckItem("test")));
+        foo.change(Arrays.asList(new CheckItem("test")), Collections.<CheckItem>emptyList());
         Thread bg = new Thread() {
             @Override
             public void run() {
                 try {
-                    fooRemote.add(Arrays.asList(new CheckItem("bar")));
+                    fooRemote.change(Arrays.asList(new CheckItem("bar")), Collections.<CheckItem>emptyList());
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
                 System.out.println("removing test");
                 try {
-                    fooRemote.remove(Arrays.asList(new CheckItem("test")));
+                    fooRemote.change(Collections.<CheckItem>emptyList(), Arrays.asList(new CheckItem("test")));
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
@@ -70,7 +71,7 @@ public class WebDAVUT {
             }
         };
         bg.start();
-        foo.add(Arrays.asList(new CheckItem("bar2")));
+        foo.change(Arrays.asList(new CheckItem("bar2")), Collections.<CheckItem>emptyList());
         bg.join();
         foo.refresh();
         assertThat(foo.getContent(), containsInAnyOrder(new CheckItem("bar"), new CheckItem("bar2")));

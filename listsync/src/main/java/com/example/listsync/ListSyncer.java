@@ -52,6 +52,12 @@ public class ListSyncer implements Runnable {
     }
 
     public void add(CheckItem item) {
+        if (local.contains(item)) {
+            return;
+        }
+        if (local.contains(item.toggleChecked())){
+            doRemove(item.toggleChecked());
+        }
         LOGGER.info("adding; running? {}", running);
         local.add(item);
         synchronized (notYetDeleted) {
@@ -69,6 +75,10 @@ public class ListSyncer implements Runnable {
     }
 
     public void remove(CheckItem item) {
+        doRemove(item);
+    }
+
+    private void doRemove(CheckItem item) {
         LOGGER.info("removing; running? {}", running);
         local.remove(item);
         synchronized (uncommitted) {
@@ -109,8 +119,18 @@ public class ListSyncer implements Runnable {
     @Override
     public void run() {
         running = true;
+        List<CheckItem> localUncommitted;
+        List<CheckItem> localNotYetDelted;
+        synchronized (notYetDeleted) {
+            synchronized (uncommitted) {
+                localNotYetDelted = Lists.newArrayList(notYetDeleted);
+                notYetDeleted.clear();
+                localUncommitted = Lists.newArrayList(this.uncommitted);
+                uncommitted.clear();
+            }
+        }
         List<CheckItem> reference = Lists.newArrayList(local);
-        if (uncommitted.isEmpty() && notYetDeleted.isEmpty()) {
+        if (localUncommitted.isEmpty() && localNotYetDelted.isEmpty()) {
             LOGGER.info("nothing to commit, just refreshing");
             try {
                 refresh();
@@ -118,41 +138,19 @@ public class ListSyncer implements Runnable {
                 notifyException(e);
             }
         }
-        List<CheckItem> localUncommitted;
-        synchronized (uncommitted) {
-            localUncommitted = Lists.newArrayList(this.uncommitted);
-            uncommitted.clear();
-        }
-        if (!localUncommitted.isEmpty()) {
-            try {
-                LOGGER.info("now committing {}", localUncommitted);
-                remote.add(localUncommitted);
-                refreshLocal();
-            } catch (IOException e) {
-                LOGGER.info("exception while committing readding {} to uncommitted-state", localUncommitted);
-                synchronized (uncommitted) {
-                    uncommitted.addAll(localUncommitted);
-                }
-                notifyException(e);
-            }
-        }
-        List<CheckItem> localNotYetDelted;
-        synchronized (notYetDeleted) {
-            localNotYetDelted = Lists.newArrayList(notYetDeleted);
-            notYetDeleted.clear();
-        }
-        if (!localNotYetDelted.isEmpty()) {
-            try {
-                LOGGER.info("now deleting {}", localNotYetDelted);
-                remote.remove(localNotYetDelted);
-                refreshLocal();
-            } catch (IOException e) {
-                LOGGER.info("exception while removing. readding {} to notyetdeleted-state", localUncommitted);
+        try {
+            LOGGER.info("now committing {}", localUncommitted);
+            remote.change(localUncommitted, localNotYetDelted);
+            refreshLocal();
+        } catch (IOException e) {
+            LOGGER.info("exception while committing readding {} to uncommitted-state", localUncommitted);
+            synchronized (uncommitted) {
                 synchronized (notYetDeleted) {
                     notYetDeleted.addAll(localNotYetDelted);
+                    uncommitted.addAll(localUncommitted);
                 }
-                notifyException(e);
             }
+            notifyException(e);
         }
         if (!local.equals(reference)) {
             LOGGER.info("change detected: {}", local);
