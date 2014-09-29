@@ -20,18 +20,12 @@
 package com.example.listsync;
 
 import java.io.IOException;
-import java.util.Collection;
 import java.util.List;
 
-public interface Repository {
+public interface Repository<RepositoryType extends ListRepository> {
 
-    List<String> download(String file) throws IOException;
+    RepositoryType getList(String name);
 
-    Collection<String> listFiles() throws IOException;
+    List<String> getLists() throws IOException;
 
-    void upload(String name, List<String> bytes) throws IOException;
-
-    void lock(String name);
-
-    void unlock(String name);
 }

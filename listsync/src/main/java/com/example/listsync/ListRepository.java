@@ -1,5 +1,5 @@
 /*
- * Copyright Christoph Gritschenberger 2014.
+ * Copyright Christoph Gritschenberger 2015.
  *
  * This file is part of OwnList.
  *
@@ -19,75 +19,17 @@
 
 package com.example.listsync;
 
-import com.google.common.base.*;
-import com.google.common.collect.Collections2;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
-import java.util.ListIterator;
 
-public class ListRepository {
+public interface ListRepository {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(ListRepository.class);
+    List<CheckItem> getContent() throws IOException;
 
-    private final String name;
-    private final Repository repository;
+    void remove(CheckItem item) throws IOException;
 
-    protected List<CheckItem> content;
+    void add(CheckItem item) throws IOException;
 
-    public ListRepository(String name, Repository repository) {
-        this(name, repository, new ArrayList<CheckItem>());
-    }
-
-    public ListRepository(String name, Repository repository, List<CheckItem> content) {
-        this.name = name;
-        this.repository = repository;
-        this.content = content;
-    }
-
-    public synchronized void change(Collection<CheckItem> added, Collection<CheckItem> removed) throws IOException {
-        if (added.isEmpty() && removed.isEmpty()) {
-            return;
-        }
-        repository.lock(name);
-        LOGGER.info("refreshing content before adding {} and removing {}", added, removed);
-        doRefresh();
-        content.addAll(added);
-        content.removeAll(removed);
-        repository.upload(name, toStringList(content));
-        repository.unlock(name);
-    }
-
-    public void refresh() throws IOException {
-        doRefresh();
-    }
-
-    private void doRefresh() throws IOException {
-        content = fromStringList(repository.download(name));
-        LOGGER.info("refreshed content {}", content);
-    }
-
-    private List<CheckItem> fromStringList(List<String> download) {
-        return Lists.newArrayList(Iterables.filter(Lists.transform(download, new Function<String, CheckItem>() {
-            @Override
-            public CheckItem apply(String input) {
-                return CheckItem.fromString(input);
-            }
-        }), Predicates.notNull()));
-    }
-
-    private List<String> toStringList(List<CheckItem> download) {
-        return Lists.transform(download, Functions.toStringFunction());
-    }
-
-    public List<CheckItem> getContent() {
-        return content;
-    }
+    void toggle(CheckItem item) throws IOException;
 
 }

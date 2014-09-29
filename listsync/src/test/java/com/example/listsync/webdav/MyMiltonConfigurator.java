@@ -17,10 +17,24 @@
  * along with OwnList.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-package com.example.listsync;
+package com.example.listsync.webdav;
 
-public class LockException extends RuntimeException {
-    public LockException(Exception e) {
-        super(e);
+import io.milton.http.HttpManager;
+import io.milton.http.fs.FileSystemResourceFactory;
+import io.milton.http.fs.NullSecurityManager;
+import io.milton.servlet.Config;
+import io.milton.servlet.DefaultMiltonConfigurator;
+
+import javax.servlet.ServletException;
+import java.io.File;
+
+public class MyMiltonConfigurator extends DefaultMiltonConfigurator {
+
+    @Override
+    public HttpManager configure(Config config) throws ServletException {
+        String pathname = config.getInitParameter("webdav.root");
+        builder.setMainResourceFactory(new FileSystemResourceFactory(new File(pathname), new NullSecurityManager()));
+        return super.configure(config);
     }
+
 }

@@ -19,42 +19,35 @@
 
 package com.example.listsync;
 
-import com.google.common.base.Function;
-import com.google.common.base.Predicate;
-import com.google.common.base.Strings;
-import com.google.common.collect.Collections2;
+import com.google.common.base.*;
+import com.google.common.collect.FluentIterable;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.UsernamePasswordCredentials;
 import org.apache.commons.httpclient.auth.AuthScope;
 import org.apache.commons.httpclient.methods.ByteArrayRequestEntity;
-import org.apache.commons.httpclient.methods.GetMethod;
 import org.apache.commons.httpclient.methods.PutMethod;
-import org.apache.commons.io.IOUtils;
 import org.apache.jackrabbit.webdav.DavConstants;
 import org.apache.jackrabbit.webdav.DavException;
 import org.apache.jackrabbit.webdav.MultiStatus;
 import org.apache.jackrabbit.webdav.MultiStatusResponse;
 import org.apache.jackrabbit.webdav.client.methods.DavMethod;
 import org.apache.jackrabbit.webdav.client.methods.DeleteMethod;
+import org.apache.jackrabbit.webdav.client.methods.MoveMethod;
 import org.apache.jackrabbit.webdav.client.methods.PropFindMethod;
-import org.apache.jackrabbit.webdav.property.DavProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.text.ParseException;
-import java.text.SimpleDateFormat;
-import java.util.*;
+import java.io.UnsupportedEncodingException;
+import java.net.*;
+import java.util.Arrays;
+import java.util.List;
 
 public class WebDavRepository implements Repository {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(WebDavRepository.class);
-
-    private final UUID clientId = UUID.randomUUID();
 
     private final WebDavConfiguration config;
     private HttpClient client;
@@ -66,43 +59,21 @@ public class WebDavRepository implements Repository {
 
     private void init() {
         client = new HttpClient();
-        client.getState().setCredentials(
-                new AuthScope(config.getAdress(), config.getPort()),
-                new UsernamePasswordCredentials(config.getUsername(), config.getPassword())
-        );
-    }
-
-    public List<String> download(String file) throws IOException {
-        return doDownload(file + ".list");
-    }
-
-    private List<String> doDownload(String file) throws IOException {
-        LOGGER.info("downloading {}", file);
-        GetMethod get = new GetMethod(getFullWatchURL() + file);
-        int i = client.executeMethod(get);
-        if (i != 200) {
-            return new ArrayList<>();
+        if (config.getUsername() != null) {
+            client.getState().setCredentials(
+                    new AuthScope(config.getAdress(), config.getPort()),
+                    new UsernamePasswordCredentials(config.getUsername(), config.getPassword())
+            );
         }
-        byte[] bytes = get.getResponseBody();
-        LOGGER.info("download complete {}", file);
-        return IOUtils.readLines(new ByteArrayInputStream(bytes));
     }
 
-    public Collection<String> listFiles() throws IOException {
-        MultiStatusResponse[] responses = doPropFind(getFullWatchURL());
-        return Collections2.filter(
-                Lists.transform(Arrays.asList(responses), new Function<MultiStatusResponse, String>() {
-                    @Override
-                    public String apply(MultiStatusResponse multiStatusResponse) {
-                        return multiStatusResponse.getHref().replaceFirst("/" + config.getWatchpath(), "");
-                    }
-                }), new Predicate<String>() {
-                    @Override
-                    public boolean apply(String s) {
-                        return !Strings.isNullOrEmpty(s) && !s.endsWith("/");
-                    }
-                }
-        );
+    private String getFullWatchURL() {
+        return config.getBaseUrl() + "/" + config.getWatchpath() + "/";
+    }
+
+    @Override
+    public ListRepository getList(String name) {
+        return new WebListDavRepository(name);
     }
 
     private MultiStatusResponse[] doPropFind(String url) throws IOException {
@@ -117,114 +88,105 @@ public class WebDavRepository implements Repository {
         return multiStatus.getResponses();
     }
 
-    public void upload(String file, List<String> content) throws IOException {
-        doUpload(file + ".list", content);
-    }
-
-    private void doUpload(String file, List<String> content) throws IOException {
-        LOGGER.info("uploading {}", file);
-        LOGGER.info("uploading {} -> {}", file, content);
-        PutMethod putMethod = new PutMethod(config.getBaseUrl() + config.getWatchpath() + file);
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        IOUtils.writeLines(content, IOUtils.LINE_SEPARATOR_UNIX, output);
-        putMethod.setRequestEntity(new ByteArrayRequestEntity(output.toByteArray()));
-        int code = client.executeMethod(putMethod);
-        LOGGER.info("upload resultcode: {}", code);
-    }
-
-    private String getFullWatchURL() {
-        return config.getBaseUrl() + config.getWatchpath();
-    }
-
-    private static Date getLastModified(MultiStatusResponse multiStatusResponse) {
-        DavProperty<?> davProperty = multiStatusResponse.getProperties(200).get(DavConstants.PROPERTY_GETLASTMODIFIED);
-        try {
-            return new SimpleDateFormat("E, dd MMM yyyy HH:mm:ss z").parse(davProperty.getValue().toString());
-        } catch (ParseException e) {
-            return new Date();
-        }
-    }
-
     @Override
-    public void lock(String name) {
-        try {
-            final String lockFileName = getLockFileBaseName(name);
-            doUpload(lockFileName + clientId.toString(), Arrays.asList(clientId.toString()));
-            waitForLockFileToBecomeTop(lockFileName);
-        } catch (IOException e) {
-            throw new LockException(e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new LockException(e);
-        }
-    }
-
-    private void waitForLockFileToBecomeTop(final String lockFileName) throws IOException, InterruptedException {
-        LOGGER.info("waiting for {} to become top", lockFileName);
-        while (true) {
-            MultiStatusResponse[] multiStatusResponses = doPropFind(getFullWatchURL());
-            List<MultiStatusResponse> lockFiles = Lists.newArrayList(Collections2.filter(Arrays.asList(multiStatusResponses), new Predicate<MultiStatusResponse>() {
-                @Override
-                public boolean apply(MultiStatusResponse input) {
-                    return input.getHref().contains(lockFileName);
+    public List<String> getLists() throws IOException {
+        MultiStatusResponse[] responses = doPropFind(getFullWatchURL());
+        return Lists.newArrayList(Iterables.filter(
+                Iterables.transform(Arrays.asList(responses), new Function<MultiStatusResponse, String>() {
+                    @Override
+                    public String apply(MultiStatusResponse multiStatusResponse) {
+                        return multiStatusResponse.getHref().replaceFirst("/" + config.getWatchpath(), "");
+                    }
+                }), new Predicate<String>() {
+                    @Override
+                    public boolean apply(String s) {
+                        return !Strings.isNullOrEmpty(s) && !s.endsWith("/");
+                    }
                 }
-            }));
-            Collections.sort(lockFiles, new Comparator<MultiStatusResponse>() {
-                @Override
-                public int compare(MultiStatusResponse o1, MultiStatusResponse o2) {
-                    return getLastModified(o1).compareTo(getLastModified(o2));
-                }
-            });
-            MultiStatusResponse myself = Iterables.find(lockFiles, new Predicate<MultiStatusResponse>() {
-                @Override
-                public boolean apply(MultiStatusResponse input) {
-                    return input.getHref().contains(clientId.toString());
-                }
-            });
-            removeOldLockFiles(lockFiles, getLastModified(myself).getTime());
-            if (lockFiles.isEmpty()) {
-                throw new IllegalStateException("expected there to be lock-files");
-            }
-            if (lockFiles.get(0) == myself) {
-                LOGGER.info("{} now on top", lockFileName);
-                return;
-            } else {
-                LOGGER.info("{} on top", lockFiles.get(0).getHref());
-                Thread.sleep(1000);
-            }
+        ));
+        /*List<DavResource> list = sardine.list(getFullWatchURL());
+        return Lists.newArrayList(
+                Iterables.transform(
+                        Iterables.filter(list, new Predicate<DavResource>() {
+                            @Override
+                            public boolean apply(DavResource input) {
+                                return input.isDirectory();
+                            }
+                        }),
+                        new Function<DavResource, String>() {
+                            @Override
+                            public String apply(DavResource input) {
+                                return input.getName();
+                            }
+                        }
+                )
+        );*/
+    }
+
+    private class WebListDavRepository implements ListRepository {
+        private final String listName;
+
+        public WebListDavRepository(String listName) {
+            this.listName = listName;
+        }
+
+        @Override
+        public List<CheckItem> getContent() throws IOException {
+            MultiStatusResponse[] responses = doPropFind(getFullWatchURL() + "/" + listName);
+            return FluentIterable.from(Arrays.asList(responses))
+                    .transform(new Function<MultiStatusResponse, String>() {
+                        @Override
+                        public String apply(MultiStatusResponse input) {
+                            return input.getHref()
+                                    .replaceFirst("/" + config.getWatchpath() + "/" + listName + "/", "")
+                                    .replaceAll("^\\/*", "");                        }
+                    })
+                    .filter(new Predicate<String>() {
+                        @Override
+                        public boolean apply(String input) {
+                            return !input.isEmpty();
+                        }
+                    })
+                    .transform(new Function<String, CheckItem>() {
+                        @Override
+                        public CheckItem apply(String input) {
+                            try {
+                                String unescaped = URLDecoder.decode(input, Charsets.UTF_8.name());
+                                return CheckItem.fromString(unescaped);
+                            } catch (UnsupportedEncodingException e) {
+                                throw new IllegalStateException(e);
+                            }
+                        }
+                    })
+                    .toList();
+        }
+
+        @Override
+        public void remove(CheckItem item) throws IOException {
+            DeleteMethod deleteMethod = new DeleteMethod(itemUrl(item));
+            int code = client.executeMethod(deleteMethod);
+            LOGGER.info("upload resultcode: {}", code);
+        }
+
+        @Override
+        public void add(CheckItem item) throws IOException {
+            PutMethod putMethod = new PutMethod(itemUrl(item));
+            putMethod.setRequestEntity(new ByteArrayRequestEntity(new byte[0]));
+            int code = client.executeMethod(putMethod);
+            LOGGER.info("upload resultcode: {}", code);
+        }
+
+        @Override
+        public void toggle(CheckItem newItem) throws IOException {
+            MoveMethod moveMethod = new MoveMethod(itemUrl(newItem), itemUrl(newItem.toggleChecked()), true);
+            int code = client.executeMethod(moveMethod);
+            LOGGER.info("move resultcode: {}", code);
+        }
+
+        private String itemUrl(CheckItem item) throws MalformedURLException, UnsupportedEncodingException {
+            String encodedListName = URLEncoder.encode(listName, Charsets.UTF_8.name()).replace("+", "%20");
+            String encodedItem = URLEncoder.encode(item.toString(), Charsets.UTF_8.name()).replace("+", "%20");
+            return Joiner.on("/").join(getFullWatchURL(), encodedListName, encodedItem);
         }
     }
-
-    private void removeOldLockFiles(List<MultiStatusResponse> lockFiles, long reference) throws IOException {
-        Iterator<MultiStatusResponse> iterator = lockFiles.iterator();
-        while (iterator.hasNext()) {
-            MultiStatusResponse next = iterator.next();
-            if (isOlderThan(next, 10000, reference)) {
-                client.executeMethod(new DeleteMethod(config.getBaseUrl() + lockFiles.get(0).getHref()));
-                iterator.remove();
-            } else {
-                break;
-            }
-        }
-    }
-
-    private boolean isOlderThan(MultiStatusResponse next, int millis, long referenceTime) {
-        Date millisAgo = new Date(referenceTime - millis);
-        return getLastModified(next).before(millisAgo);
-    }
-
-    private String getLockFileBaseName(String name) {
-        return "." + name + ".lock";
-    }
-
-    @Override
-    public void unlock(String name) {
-        try {
-            DeleteMethod deleteMethod = new DeleteMethod(config.getBaseUrl() + config.getWatchpath() + getLockFileBaseName(name) + clientId.toString());
-            client.executeMethod(deleteMethod);
-        } catch (IOException e) {
-            throw new LockException(e);
-        }
-    }
-
 }

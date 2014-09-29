@@ -19,23 +19,23 @@
 
 package com.example.listsync;
 
-import com.google.common.collect.Lists;
+import com.google.common.base.Function;
+import com.google.common.collect.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class ListSyncer implements Runnable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ListSyncer.class);
 
     private final List<CheckItem> local = new ArrayList<>();
-    private final List<CheckItem> uncommitted = new ArrayList<>();
-    private final List<CheckItem> notYetDeleted = new ArrayList<>();
+    private final Queue<Operation> operationQueue = new LinkedList<>();
+    private final Lock queueLock = new ReentrantLock();
     private final ListRepository remote;
 
     private final List<Consumer<List<CheckItem>>> changeListeners = new ArrayList<>();
@@ -51,65 +51,42 @@ public class ListSyncer implements Runnable {
         this.remote = remote;
     }
 
-    public void add(CheckItem item) {
-        if (local.contains(item)) {
-            return;
-        }
-        if (local.contains(item.toggleChecked())){
-            doRemove(item.toggleChecked());
+    public void add(final CheckItem item) {
+        synchronized (local) {
+            if (local.contains(item)) {
+                return;
+            }
+            if (local.contains(item.toggleChecked())){
+                toggle(item);
+            }
         }
         LOGGER.info("adding; running? {}", running);
         local.add(item);
-        synchronized (notYetDeleted) {
-            synchronized (uncommitted) {
-                if (notYetDeleted.contains(item)) {
-                    LOGGER.info("readding removed item {}", item);
-                    notYetDeleted.remove(item);
-                } else {
-                    LOGGER.info("locally adding item {}", item);
-                    uncommitted.add(item);
-                }
-            }
-        }
+        queueLock.lock();
+        operationQueue.add(new AddOperation(item));
+        queueLock.unlock();
+    }
 
+    public void toggle(final CheckItem item) {
+        synchronized (local) {
+            local.remove(item);
+            local.add(item.toggleChecked());
+        }
+        queueLock.lock();
+        operationQueue.add(new ToggleOperation(item));
+        queueLock.unlock();
     }
 
     public void remove(CheckItem item) {
-        doRemove(item);
-    }
-
-    private void doRemove(CheckItem item) {
-        LOGGER.info("removing; running? {}", running);
-        local.remove(item);
-        synchronized (uncommitted) {
-            synchronized (notYetDeleted) {
-                if (uncommitted.contains(item)) {
-                    LOGGER.info("removing not yet committed item {}", item);
-                    uncommitted.remove(item);
-                } else {
-                    LOGGER.info("locally removing item {}", item);
-                    notYetDeleted.add(item);
-                }
+        synchronized (local) {
+            if (!local.contains(item)){
+                return;
             }
+            local.remove(item);
         }
-    }
-
-    public void refresh() throws IOException {
-        remote.refresh();
-        refreshLocal();
-    }
-
-    private void refreshLocal() {
-        synchronized (notYetDeleted) {
-            synchronized (uncommitted) {
-                local.clear();
-                local.addAll(remote.getContent());
-                LOGGER.info("refreshed: server-content {}", local);
-                LOGGER.info("applying notYetDeleted: {}; uncommitted: {}", notYetDeleted, uncommitted);
-                local.removeAll(notYetDeleted);
-                local.addAll(uncommitted);
-            }
-        }
+        queueLock.lock();
+        operationQueue.add(new RemoveOperation(item));
+        queueLock.unlock();
     }
 
     public List<CheckItem> getLocal() {
@@ -119,44 +96,86 @@ public class ListSyncer implements Runnable {
     @Override
     public void run() {
         running = true;
-        List<CheckItem> localUncommitted;
-        List<CheckItem> localNotYetDelted;
-        synchronized (notYetDeleted) {
-            synchronized (uncommitted) {
-                localNotYetDelted = Lists.newArrayList(notYetDeleted);
-                notYetDeleted.clear();
-                localUncommitted = Lists.newArrayList(this.uncommitted);
-                uncommitted.clear();
-            }
-        }
-        List<CheckItem> reference = Lists.newArrayList(local);
-        if (localUncommitted.isEmpty() && localNotYetDelted.isEmpty()) {
-            LOGGER.info("nothing to commit, just refreshing");
-            try {
-                refresh();
-            } catch (IOException e) {
-                notifyException(e);
-            }
-        }
         try {
-            LOGGER.info("now committing {}", localUncommitted);
-            remote.change(localUncommitted, localNotYetDelted);
-            refreshLocal();
-        } catch (IOException e) {
-            LOGGER.info("exception while committing readding {} to uncommitted-state", localUncommitted);
-            synchronized (uncommitted) {
-                synchronized (notYetDeleted) {
-                    notYetDeleted.addAll(localNotYetDelted);
-                    uncommitted.addAll(localUncommitted);
+            Operation nextOp;
+            queueLock.lock();
+            while((nextOp = operationQueue.poll()) != null) {
+                queueLock.unlock();
+                final Operation finalNextOp = nextOp;
+                Thread opThread = new Thread() {
+                    @Override
+                    public void run() {
+                        try {
+                            finalNextOp.perform();
+                        } catch (IOException e) {
+                            notifyException(e);
+                        }
+                    }
+                };
+                opThread.start();
+                Thread compactThread = new Thread() {
+                    @Override
+                    public void run() {
+                        queueLock.lock();
+                        List<Operation> copy = Lists.newArrayList(operationQueue);
+                        operationQueue.clear();
+                        operationQueue.addAll(compactOperations(copy));
+                        queueLock.unlock();
+                    }
+                };
+                compactThread.start();
+                opThread.join();
+                compactThread.join();
+                queueLock.lock();
+            }
+            synchronized (local) {
+                List<CheckItem> reference = Lists.newArrayList(local);
+                local.clear();
+                local.addAll(remote.getContent());
+                queueLock.unlock();
+                if (!local.equals(reference)) {
+                    LOGGER.info("change detected: {}", local);
+                    notifyListChanged();
                 }
             }
+        } catch (IOException e) {
             notifyException(e);
+        } catch (InterruptedException e) {
+            // ignore, done anyway
+        } finally {
+            running = false;
         }
-        if (!local.equals(reference)) {
-            LOGGER.info("change detected: {}", local);
-            notifyListChanged();
+    }
+
+    private List<Operation> compactOperations(List<Operation> copy) {
+        Multimap<String,Operation> operations = Multimaps.index(copy, new Function<Operation, String>() {
+            @Override
+            public String apply(Operation input) {
+                return input.item.getText();
+            }
+        });
+        for (Map.Entry<String, Collection<Operation>> entry : operations.asMap().entrySet()) {
+            Collection<Operation> itemOps = entry.getValue();
+            if (itemOps.size() <= 1) {
+                continue;
+            }
+            Iterator<Operation> iterator = itemOps.iterator();
+            Operation current = iterator.next();
+            while(iterator.hasNext()) {
+                Operation next = iterator.next();
+                Operation merged = current.merge(next);
+                if (merged == current) {
+                    copy.remove(next);
+                } else if (merged == next) {
+                    copy.remove(current);
+                } else {
+                    copy.remove(current);
+                    int i = copy.indexOf(next);
+                    copy.set(i, merged);
+                }
+            }
         }
-        running = false;
+        return copy;
     }
 
     public void registerChangeListener(Consumer<List<CheckItem>> mock) {
@@ -183,4 +202,127 @@ public class ListSyncer implements Runnable {
     public boolean isRunning() {
         return running;
     }
+
+    abstract class Operation {
+
+        protected final CheckItem item;
+
+        protected Operation(CheckItem item) {
+            this.item = item;
+        }
+
+        abstract void perform() throws IOException;
+
+        public Operation merge(Operation other) {
+            if (other instanceof Noop) {
+                return this;
+            }
+            throw new IllegalStateException("unknown Operation-type " + other.getClass());
+        }
+
+    }
+
+    private class AddOperation extends Operation {
+
+        public AddOperation(CheckItem item) {
+            super(item);
+        }
+
+        @Override
+        public void perform() throws IOException {
+            remote.add(item);
+        }
+
+        @Override
+        public Operation merge(Operation other) {
+            if (other instanceof RemoveOperation) {
+                return null;
+            }
+            if (other instanceof AddOperation) {
+                return other;
+            }
+            if (other instanceof ToggleOperation) {
+                return new AddOperation(item.toggleChecked());
+            }
+            return super.merge(other);
+        }
+    }
+
+    private class RemoveOperation extends Operation {
+
+        public RemoveOperation(CheckItem item) {
+            super(item);
+        }
+
+        @Override
+        public void perform() throws IOException {
+            remote.remove(item);
+        }
+
+        @Override
+        public Operation merge(Operation other) {
+            if (other instanceof RemoveOperation) {
+                return this;
+            }
+            if (other instanceof AddOperation) {
+                if (item.isChecked() == other.item.isChecked()){
+                    return null;
+                }
+                return new ToggleOperation(item);
+            }
+            if (other instanceof ToggleOperation) {
+                return this;
+            }
+            return super.merge(other);
+        }
+    }
+
+    private class ToggleOperation extends Operation {
+        public ToggleOperation(CheckItem item) {
+            super(item);
+        }
+
+        @Override
+        public void perform() throws IOException {
+            remote.toggle(item);
+        }
+
+        @Override
+        public Operation merge(Operation other) {
+            if (other instanceof RemoveOperation) {
+                return other;
+            }
+            if (other instanceof AddOperation) {
+                if (item.isChecked() == other.item.isChecked()){
+                    return null;
+                }
+                return this;
+            }
+            if (other instanceof ToggleOperation) {
+                if (item.isChecked() == other.item.isChecked()){
+                    return this;
+                }
+                return null;
+            }
+            return super.merge(other);
+        }
+    }
+
+    private class Noop extends Operation {
+
+        protected Noop(CheckItem item) {
+            super(item);
+        }
+
+        @Override
+        void perform() {
+        }
+
+        @Override
+        public Operation merge(Operation other) {
+            return other;
+        }
+
+    }
+
 }

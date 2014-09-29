@@ -66,7 +66,7 @@ public class MainActivity extends Activity {
                 .build();
         WebDavRepository repository = new WebDavRepository(config);
 
-        listSyncer = new UpdatingListSyncer(new ListRepository("test", repository));
+        listSyncer = new UpdatingListSyncer(repository.getList("test2"));
         listSyncer.registerExceptionHandler(new Consumer<Exception>() {
             @Override
             public void consume(final Exception e) {

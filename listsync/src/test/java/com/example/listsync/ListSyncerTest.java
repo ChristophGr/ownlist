@@ -20,7 +20,9 @@
 package com.example.listsync;
 
 import org.jmock.Expectations;
+import org.jmock.auto.Mock;
 import org.jmock.integration.junit4.JUnitRuleMockery;
+import org.jmock.lib.concurrent.Synchroniser;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -35,52 +37,119 @@ import static org.junit.Assert.assertThat;
 public class ListSyncerTest {
 
     @Rule
-    public final JUnitRuleMockery context = new JUnitRuleMockery();
+    public final JUnitRuleMockery context = new JUnitRuleMockery(){{
+        setThreadingPolicy(new Synchroniser());
+    }};
 
     private ListSyncer listSyncer;
-    private RepositoryStub repository;
+    @Mock
+    private ListRepository repository;
 
     @Before
     public void setUp() throws Exception {
-        repository = new RepositoryStub();
-        ListRepository remote = new ListRepository("foo", repository);
-        listSyncer = new ListSyncer(remote);
+        listSyncer = new ListSyncer(repository);
     }
 
     @Test
     public void testUploadsSingleEntry() throws Exception {
-        CheckItem foo = new CheckItem("foo");
+        final CheckItem foo = new CheckItem("foo");
         listSyncer.add(foo);
 
+        context.checking(new Expectations(){{
+            allowing(repository).getContent();
+            will(returnValue(new ArrayList<>()));
+            oneOf(repository).add(foo);
+        }});
         listSyncer.run();
-
-        assertThat(repository.getFileContent(), contains(
-                is(foo.toString())
-        ));
     }
 
     @Test
     public void testAddsMultipleEntriesInABatch() throws Exception {
-        CheckItem anItem = new CheckItem("foo");
+        final CheckItem anItem = new CheckItem("foo");
         listSyncer.add(anItem);
-        CheckItem anotherItem = new CheckItem("foo2");
+        final CheckItem anotherItem = new CheckItem("foo2");
         listSyncer.add(anotherItem);
 
+        context.checking(new Expectations(){{
+            allowing(repository).getContent();
+            will(returnValue(new ArrayList<>()));
+            oneOf(repository).add(anItem);
+            oneOf(repository).add(anotherItem);
+        }});
         listSyncer.run();
+    }
 
-        assertThat(repository.getFileContent(), contains(
-                is(anItem.toString()),
-                is(anotherItem.toString())
-        ));
+    @Test
+    public void testAddAndRemoveCancelEachOtherOut() throws Exception {
+        final CheckItem barItem = new CheckItem("bar");
+        listSyncer.add(barItem);
+        final CheckItem anItem = new CheckItem("foo");
+        listSyncer.add(anItem);
+        listSyncer.remove(anItem);
+
+        context.checking(new Expectations(){{
+            oneOf(repository).add(barItem);
+            allowing(repository).getContent();
+            will(returnValue(new ArrayList<>()));
+        }});
+        listSyncer.run();
+    }
+
+    @Test
+    public void testAddAndToggleGetCompacted() throws Exception {
+        final CheckItem barItem = new CheckItem("bar");
+        listSyncer.add(barItem);
+        final CheckItem anItem = new CheckItem("foo");
+        listSyncer.add(anItem);
+        listSyncer.toggle(anItem);
+
+        context.checking(new Expectations(){{
+            oneOf(repository).add(barItem);
+            oneOf(repository).add(anItem.toggleChecked());
+            allowing(repository).getContent();
+            will(returnValue(new ArrayList<>()));
+        }});
+        listSyncer.run();
+    }
+
+    @Test
+    public void testDoubleToggleIsCancelled() throws Exception {
+        final CheckItem barItem = new CheckItem("bar");
+        listSyncer.add(barItem);
+        listSyncer.toggle(barItem);
+        listSyncer.toggle(barItem.toggleChecked());
+
+        context.checking(new Expectations(){{
+            oneOf(repository).add(barItem);
+            allowing(repository).getContent();
+            will(returnValue(new ArrayList<>()));
+        }});
+        listSyncer.run();
+    }
+
+    @Test
+    public void testReaddingCheckedItemUntoggles() throws Exception {
+        final CheckItem barItem = new CheckItem("bar");
+        listSyncer.add(barItem);
+        listSyncer.toggle(barItem);
+        listSyncer.add(barItem);
+
+        context.checking(new Expectations(){{
+            oneOf(repository).add(barItem);
+            allowing(repository).getContent();
+            will(returnValue(new ArrayList<>()));
+        }});
+        listSyncer.run();
     }
 
     @Test
     public void testNotifiesChangeListenerOnChange() throws Exception {
-        final CheckItem anItem = new CheckItem("foo");
-        repository.add(anItem);
         final Consumer mock = context.mock(Consumer.class);
         listSyncer.registerChangeListener(mock);
         context.checking(new Expectations() {{
+            CheckItem anItem = new CheckItem("foo");
+            oneOf(repository).getContent();
+            will(returnValue(Arrays.asList(anItem)));
             oneOf(mock).consume(Arrays.asList(anItem));
         }});
         listSyncer.run();
