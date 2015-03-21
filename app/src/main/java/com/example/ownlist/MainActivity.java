@@ -236,7 +236,7 @@ public class MainActivity extends Activity {
             new Thread() {
                 @Override
                 public void run() {
-                    source.add(checkItem.toggleChecked());
+                    source.toggle(checkItem);
                     doNotifyDataSetChanged();
                 }
             }.start();

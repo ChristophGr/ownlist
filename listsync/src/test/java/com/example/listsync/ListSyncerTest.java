@@ -116,13 +116,48 @@ public class ListSyncerTest {
     public void testDoubleToggleIsCancelled() throws Exception {
         final CheckItem barItem = new CheckItem("bar");
         listSyncer.add(barItem);
+        context.checking(new Expectations() {{
+            oneOf(repository).add(barItem);
+            allowing(repository).getContent();
+            will(returnValue(Arrays.asList(barItem)));
+        }});
+        listSyncer.run();
+
+        final CheckItem fooItem = new CheckItem("foo");
+        listSyncer.add(fooItem);
         listSyncer.toggle(barItem);
         listSyncer.toggle(barItem.toggleChecked());
 
         context.checking(new Expectations(){{
+            oneOf(repository).add(fooItem);
+            allowing(repository).getContent();
+            will(returnValue(Arrays.asList(barItem)));
+        }});
+        listSyncer.run();
+    }
+
+    @Test
+    public void testTripleToggleBecomesOne() throws Exception {
+        final CheckItem barItem = new CheckItem("bar");
+        listSyncer.add(barItem);
+        context.checking(new Expectations() {{
             oneOf(repository).add(barItem);
             allowing(repository).getContent();
-            will(returnValue(new ArrayList<>()));
+            will(returnValue(Arrays.asList(barItem)));
+        }});
+        listSyncer.run();
+
+        final CheckItem fooItem = new CheckItem("foo");
+        listSyncer.add(fooItem);
+        listSyncer.toggle(barItem);
+        listSyncer.toggle(barItem.toggleChecked());
+        listSyncer.toggle(barItem);
+
+        context.checking(new Expectations(){{
+            oneOf(repository).add(fooItem);
+            oneOf(repository).toggle(barItem);
+            allowing(repository).getContent();
+            will(returnValue(Arrays.asList(barItem)));
         }});
         listSyncer.run();
     }
@@ -139,7 +174,37 @@ public class ListSyncerTest {
             allowing(repository).getContent();
             will(returnValue(new ArrayList<>()));
         }});
+
         listSyncer.run();
+    }
+
+    @Test
+    public void testAddsItemThatWasAddedRemote() throws Exception {
+        final CheckItem anItem = new CheckItem("foo");
+        context.checking(new Expectations(){{
+            oneOf(repository).getContent();
+            will(returnValue(Arrays.asList(anItem)));
+        }});
+
+        listSyncer.run();
+
+        assertThat(listSyncer.getLocal(), contains(anItem));
+    }
+
+    @Test
+    public void testAddsItemThatWasAddedRemote2() throws Exception {
+        final CheckItem anItem = new CheckItem("foo");
+        final CheckItem anotherItem = new CheckItem("bar");
+        listSyncer.add(anotherItem);
+        context.checking(new Expectations(){{
+            oneOf(repository).add(anotherItem);
+            oneOf(repository).getContent();
+            will(returnValue(Arrays.asList(anItem, anotherItem)));
+        }});
+
+        listSyncer.run();
+
+        assertThat(listSyncer.getLocal(), contains(anItem, anotherItem));
     }
 
     @Test

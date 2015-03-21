@@ -33,7 +33,7 @@ public class ListSyncer implements Runnable {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(ListSyncer.class);
 
-    private final List<CheckItem> local = new ArrayList<>();
+    private final AtomicList<CheckItem> local = new AtomicList<>(new ArrayList<CheckItem>());
     private final Queue<Operation> operationQueue = new LinkedList<>();
     private final Lock queueLock = new ReentrantLock();
     private final ListRepository remote;
@@ -52,37 +52,25 @@ public class ListSyncer implements Runnable {
     }
 
     public void add(final CheckItem item) {
-        synchronized (local) {
-            if (local.contains(item)) {
-                return;
-            }
-            if (local.contains(item.toggleChecked())){
-                toggle(item);
-            }
+        if (!local.addIfAbsent(item)) {
+            return;
         }
         LOGGER.info("adding; running? {}", running);
-        local.add(item);
         queueLock.lock();
         operationQueue.add(new AddOperation(item));
         queueLock.unlock();
     }
 
     public void toggle(final CheckItem item) {
-        synchronized (local) {
-            local.remove(item);
-            local.add(item.toggleChecked());
-        }
+        local.replace(item, item.toggleChecked());
         queueLock.lock();
         operationQueue.add(new ToggleOperation(item));
         queueLock.unlock();
     }
 
     public void remove(CheckItem item) {
-        synchronized (local) {
-            if (!local.contains(item)){
-                return;
-            }
-            local.remove(item);
+        if (!local.removeIfPresent(item)) {
+            return;
         }
         queueLock.lock();
         operationQueue.add(new RemoveOperation(item));
@@ -90,23 +78,28 @@ public class ListSyncer implements Runnable {
     }
 
     public List<CheckItem> getLocal() {
-        return Collections.unmodifiableList(local);
+        return local.getDelegate();
     }
 
     @Override
     public void run() {
         running = true;
+        LOGGER.info("running ListSyncer");
         try {
             Operation nextOp;
+            LOGGER.info("locking queue for poll");
             queueLock.lock();
             while((nextOp = operationQueue.poll()) != null) {
+                LOGGER.info("unlocking queue after poll");
                 queueLock.unlock();
                 final Operation finalNextOp = nextOp;
                 Thread opThread = new Thread() {
                     @Override
                     public void run() {
                         try {
+                            LOGGER.info("{} performing operation {}", Thread.currentThread().getName(), finalNextOp);
                             finalNextOp.perform();
+                            LOGGER.info("{} operation done {}", Thread.currentThread().getName(), finalNextOp);
                         } catch (IOException e) {
                             notifyException(e);
                         }
@@ -116,33 +109,34 @@ public class ListSyncer implements Runnable {
                 Thread compactThread = new Thread() {
                     @Override
                     public void run() {
+                        LOGGER.info("locking queue for reordering");
                         queueLock.lock();
                         List<Operation> copy = Lists.newArrayList(operationQueue);
                         operationQueue.clear();
                         operationQueue.addAll(compactOperations(copy));
+                        LOGGER.info("unlocking queue after reordering");
                         queueLock.unlock();
                     }
                 };
                 compactThread.start();
+                LOGGER.info("waiting for Threads to join");
                 opThread.join();
                 compactThread.join();
+                LOGGER.info("lock again before polling again");
                 queueLock.lock();
             }
-            synchronized (local) {
-                List<CheckItem> reference = Lists.newArrayList(local);
-                local.clear();
-                local.addAll(remote.getContent());
-                queueLock.unlock();
-                if (!local.equals(reference)) {
-                    LOGGER.info("change detected: {}", local);
-                    notifyListChanged();
-                }
+            if (local.replaceAll(remote.getContent())) {
+                LOGGER.info("change detected: {}", local);
+                notifyListChanged();
             }
         } catch (IOException e) {
             notifyException(e);
         } catch (InterruptedException e) {
+            LOGGER.info("{} interrupted", Thread.currentThread().getName());
             // ignore, done anyway
         } finally {
+            queueLock.unlock();
+            LOGGER.info("DONE");
             running = false;
         }
     }
@@ -156,6 +150,7 @@ public class ListSyncer implements Runnable {
         });
         for (Map.Entry<String, Collection<Operation>> entry : operations.asMap().entrySet()) {
             Collection<Operation> itemOps = entry.getValue();
+            LOGGER.info("{} has {} operations", entry.getKey(), itemOps.size());
             if (itemOps.size() <= 1) {
                 continue;
             }
@@ -165,14 +160,18 @@ public class ListSyncer implements Runnable {
                 Operation next = iterator.next();
                 Operation merged = current.merge(next);
                 if (merged == current) {
+                    LOGGER.info("{} invalidates {}", current, next);
                     copy.remove(next);
                 } else if (merged == next) {
+                    LOGGER.info("{} supersedes {}", next, current);
                     copy.remove(current);
                 } else {
+                    LOGGER.info("{} and {} have been merged to {}", current, next, merged);
                     copy.remove(current);
                     int i = copy.indexOf(next);
                     copy.set(i, merged);
                 }
+                current = merged;
             }
         }
         return copy;
@@ -188,7 +187,7 @@ public class ListSyncer implements Runnable {
 
     protected void notifyListChanged() {
         for (Consumer<List<CheckItem>> listChangeHandler : changeListeners) {
-            listChangeHandler.consume(local);
+            listChangeHandler.consume(local.getDelegate());
         }
     }
 
@@ -236,7 +235,7 @@ public class ListSyncer implements Runnable {
         @Override
         public Operation merge(Operation other) {
             if (other instanceof RemoveOperation) {
-                return null;
+                return new Noop(item);
             }
             if (other instanceof AddOperation) {
                 return other;
@@ -266,7 +265,7 @@ public class ListSyncer implements Runnable {
             }
             if (other instanceof AddOperation) {
                 if (item.isChecked() == other.item.isChecked()){
-                    return null;
+                    return new Noop(item);
                 }
                 return new ToggleOperation(item);
             }
@@ -294,7 +293,7 @@ public class ListSyncer implements Runnable {
             }
             if (other instanceof AddOperation) {
                 if (item.isChecked() == other.item.isChecked()){
-                    return null;
+                    return new Noop(item);
                 }
                 return this;
             }
@@ -302,7 +301,7 @@ public class ListSyncer implements Runnable {
                 if (item.isChecked() == other.item.isChecked()){
                     return this;
                 }
-                return null;
+                return new Noop(item);
             }
             return super.merge(other);
         }

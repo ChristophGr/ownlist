@@ -23,10 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 public class UpdatingListSyncer extends ListSyncer {
 
@@ -73,6 +70,15 @@ public class UpdatingListSyncer extends ListSyncer {
             }
         }
         scheduledFuture = executorService.scheduleWithFixedDelay(this, 0, this.time, this.unit);
+    }
+
+    public void waitUntilDone() throws InterruptedException {
+        try {
+            scheduledFuture.get();
+        } catch (ExecutionException e) {
+            LOGGER.error("error in schedule", e);
+            // ignore
+        }
     }
 
     public void deactivate() {
