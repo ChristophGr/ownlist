@@ -26,8 +26,6 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 public class ListSyncer implements Runnable {
 
@@ -35,7 +33,6 @@ public class ListSyncer implements Runnable {
 
     private final AtomicList<CheckItem> local = new AtomicList<>(new ArrayList<CheckItem>());
     private final Queue<Operation> operationQueue = new LinkedList<>();
-    private final Lock queueLock = new ReentrantLock();
     private final ListRepository remote;
 
     private final List<Consumer<List<CheckItem>>> changeListeners = new ArrayList<>();
@@ -56,25 +53,19 @@ public class ListSyncer implements Runnable {
             return;
         }
         LOGGER.info("adding; running? {}", running);
-        queueLock.lock();
         operationQueue.add(new AddOperation(item));
-        queueLock.unlock();
     }
 
     public void toggle(final CheckItem item) {
         local.replace(item, item.toggleChecked());
-        queueLock.lock();
         operationQueue.add(new ToggleOperation(item));
-        queueLock.unlock();
     }
 
     public void remove(CheckItem item) {
         if (!local.removeIfPresent(item)) {
             return;
         }
-        queueLock.lock();
         operationQueue.add(new RemoveOperation(item));
-        queueLock.unlock();
     }
 
     public List<CheckItem> getLocal() {
@@ -88,17 +79,15 @@ public class ListSyncer implements Runnable {
         try {
             Operation nextOp;
             LOGGER.info("locking queue for poll");
-            queueLock.lock();
             while((nextOp = operationQueue.poll()) != null) {
                 LOGGER.info("unlocking queue after poll");
-                queueLock.unlock();
                 final Operation finalNextOp = nextOp;
                 Thread opThread = new Thread() {
                     @Override
                     public void run() {
                         try {
                             LOGGER.info("{} performing operation {}", Thread.currentThread().getName(), finalNextOp);
-                            finalNextOp.perform();
+                            finalNextOp.performRemote();
                             LOGGER.info("{} operation done {}", Thread.currentThread().getName(), finalNextOp);
                         } catch (IOException e) {
                             notifyException(e);
@@ -110,32 +99,35 @@ public class ListSyncer implements Runnable {
                     @Override
                     public void run() {
                         LOGGER.info("locking queue for reordering");
-                        queueLock.lock();
-                        List<Operation> copy = Lists.newArrayList(operationQueue);
-                        operationQueue.clear();
-                        operationQueue.addAll(compactOperations(copy));
+                        synchronized (operationQueue) {
+                            List<Operation> copy = Lists.newArrayList(operationQueue);
+                            operationQueue.clear();
+                            operationQueue.addAll(compactOperations(copy));
+                        }
                         LOGGER.info("unlocking queue after reordering");
-                        queueLock.unlock();
                     }
                 };
                 compactThread.start();
                 LOGGER.info("waiting for Threads to join");
                 opThread.join();
                 compactThread.join();
-                LOGGER.info("lock again before polling again");
-                queueLock.lock();
             }
             if (local.replaceAll(remote.getContent())) {
                 LOGGER.info("change detected: {}", local);
+                synchronized (operationQueue) {
+                    for (Operation operation : operationQueue) {
+                        operation.performLocal();
+                    }
+                }
                 notifyListChanged();
             }
         } catch (IOException e) {
             notifyException(e);
         } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             LOGGER.info("{} interrupted", Thread.currentThread().getName());
             // ignore, done anyway
         } finally {
-            queueLock.unlock();
             LOGGER.info("DONE");
             running = false;
         }
@@ -210,7 +202,9 @@ public class ListSyncer implements Runnable {
             this.item = item;
         }
 
-        abstract void perform() throws IOException;
+        abstract void performRemote() throws IOException;
+
+        abstract void performLocal() throws IOException;
 
         public Operation merge(Operation other) {
             if (other instanceof Noop) {
@@ -228,8 +222,13 @@ public class ListSyncer implements Runnable {
         }
 
         @Override
-        public void perform() throws IOException {
+        public void performRemote() throws IOException {
             remote.add(item);
+        }
+
+        @Override
+        void performLocal() throws IOException {
+            local.add(item);
         }
 
         @Override
@@ -254,8 +253,13 @@ public class ListSyncer implements Runnable {
         }
 
         @Override
-        public void perform() throws IOException {
+        public void performRemote() throws IOException {
             remote.remove(item);
+        }
+
+        @Override
+        void performLocal() throws IOException {
+            local.remove(item);
         }
 
         @Override
@@ -282,8 +286,13 @@ public class ListSyncer implements Runnable {
         }
 
         @Override
-        public void perform() throws IOException {
+        public void performRemote() throws IOException {
             remote.toggle(item);
+        }
+
+        @Override
+        void performLocal() throws IOException {
+            local.replace(item, item.toggleChecked());
         }
 
         @Override
@@ -314,7 +323,11 @@ public class ListSyncer implements Runnable {
         }
 
         @Override
-        void perform() {
+        void performRemote() {
+        }
+
+        @Override
+        void performLocal() throws IOException {
         }
 
         @Override
