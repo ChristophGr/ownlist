@@ -78,35 +78,10 @@ public class ListSyncer implements Runnable {
         LOGGER.info("running ListSyncer");
         try {
             Operation nextOp;
-            LOGGER.info("locking queue for poll");
             while((nextOp = operationQueue.poll()) != null) {
-                LOGGER.info("unlocking queue after poll");
-                final Operation finalNextOp = nextOp;
-                Thread opThread = new Thread() {
-                    @Override
-                    public void run() {
-                        try {
-                            LOGGER.info("{} performing operation {}", Thread.currentThread().getName(), finalNextOp);
-                            finalNextOp.performRemote();
-                            LOGGER.info("{} operation done {}", Thread.currentThread().getName(), finalNextOp);
-                        } catch (IOException e) {
-                            notifyException(e);
-                        }
-                    }
-                };
+                Thread opThread = new Thread(new OperationTask(nextOp));
                 opThread.start();
-                Thread compactThread = new Thread() {
-                    @Override
-                    public void run() {
-                        LOGGER.info("locking queue for reordering");
-                        synchronized (operationQueue) {
-                            List<Operation> copy = Lists.newArrayList(operationQueue);
-                            operationQueue.clear();
-                            operationQueue.addAll(compactOperations(copy));
-                        }
-                        LOGGER.info("unlocking queue after reordering");
-                    }
-                };
+                Thread compactThread = new Thread(new CompacterTask());
                 compactThread.start();
                 LOGGER.info("waiting for Threads to join");
                 opThread.join();
@@ -337,4 +312,35 @@ public class ListSyncer implements Runnable {
 
     }
 
+    private class OperationTask implements Runnable {
+        private final Operation finalNextOp;
+
+        public OperationTask(Operation finalNextOp) {
+            this.finalNextOp = finalNextOp;
+        }
+
+        @Override
+        public void run() {
+            try {
+                LOGGER.info("{} performing operation {}", Thread.currentThread().getName(), finalNextOp);
+                finalNextOp.performRemote();
+                LOGGER.info("{} operation done {}", Thread.currentThread().getName(), finalNextOp);
+            } catch (IOException e) {
+                notifyException(e);
+            }
+        }
+    }
+
+    private class CompacterTask implements Runnable {
+        @Override
+        public void run() {
+            LOGGER.info("locking queue for reordering");
+            synchronized (operationQueue) {
+                List<Operation> copy = Lists.newArrayList(operationQueue);
+                operationQueue.clear();
+                operationQueue.addAll(compactOperations(copy));
+            }
+            LOGGER.info("unlocking queue after reordering");
+        }
+    }
 }
