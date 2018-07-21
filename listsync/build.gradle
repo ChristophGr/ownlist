@@ -35,9 +35,7 @@ sourceSets {
 sourceSets.test.output.classes = "build/classes/test"
 */
 repositories{
-    maven{
-        url 'http://milton.io/maven'
-    }
+        mavenCentral()
 }
 
 dependencies {
@@ -52,7 +50,7 @@ dependencies {
     testCompile 'ch.qos.logback:logback-core:1.0.9'
     testCompile 'org.eclipse.jetty:jetty-server:9.2.3.v20140905'
     testCompile 'org.eclipse.jetty:jetty-servlet:9.2.3.v20140905'
-    testCompile 'io.milton:milton-server-ce:2.6.2.2'
+    //testCompile 'io.milton:milton-server-ce:2.7.4.4'
 }
 
 test {
