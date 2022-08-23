@@ -19,11 +19,11 @@
 
 package com.example.listsync;
 
-import com.google.common.base.*;
+import com.google.common.base.Charsets;
+import com.google.common.base.Joiner;
+import com.google.common.base.Strings;
 import com.google.common.collect.ComparisonChain;
-import com.google.common.collect.FluentIterable;
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
+
 import org.apache.commons.httpclient.HttpClient;
 import org.apache.commons.httpclient.UsernamePasswordCredentials;
 import org.apache.commons.httpclient.auth.AuthScope;
@@ -35,16 +35,24 @@ import org.apache.jackrabbit.webdav.DavConstants;
 import org.apache.jackrabbit.webdav.DavException;
 import org.apache.jackrabbit.webdav.MultiStatus;
 import org.apache.jackrabbit.webdav.MultiStatusResponse;
-import org.apache.jackrabbit.webdav.client.methods.*;
-import org.apache.jackrabbit.webdav.property.DavProperty;
+import org.apache.jackrabbit.webdav.client.methods.DavMethod;
+import org.apache.jackrabbit.webdav.client.methods.DeleteMethod;
+import org.apache.jackrabbit.webdav.client.methods.MkColMethod;
+import org.apache.jackrabbit.webdav.client.methods.MoveMethod;
+import org.apache.jackrabbit.webdav.client.methods.PropFindMethod;
 import org.apache.jackrabbit.webdav.property.DavPropertyName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
-import java.net.*;
-import java.util.*;
+import java.net.MalformedURLException;
+import java.net.URLDecoder;
+import java.net.URLEncoder;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
 
 public class WebDavRepository implements Repository {
 
@@ -62,8 +70,8 @@ public class WebDavRepository implements Repository {
         client = new HttpClient();
         if (config.getUsername() != null) {
             client.getState().setCredentials(
-                    new AuthScope(config.getAdress(), config.getPort()),
-                    new UsernamePasswordCredentials(config.getUsername(), config.getPassword())
+                new AuthScope(config.getAdress(), config.getPort()),
+                new UsernamePasswordCredentials(config.getUsername(), config.getPassword())
             );
         }
     }
@@ -98,19 +106,11 @@ public class WebDavRepository implements Repository {
     @Override
     public List<String> getLists() throws IOException {
         MultiStatusResponse[] responses = doPropFind(getFullWatchURL());
-        return Lists.newArrayList(Iterables.filter(
-                Iterables.transform(Arrays.asList(responses), new Function<MultiStatusResponse, String>() {
-                    @Override
-                    public String apply(MultiStatusResponse multiStatusResponse) {
-                        return multiStatusResponse.getHref().replaceFirst("/" + config.getWatchpath(), "");
-                    }
-                }), new Predicate<String>() {
-                    @Override
-                    public boolean apply(String s) {
-                        return !Strings.isNullOrEmpty(s) && !s.endsWith("/");
-                    }
-                }
-        ));
+        return Arrays.stream(responses)
+            .map(multiStatusResponse -> multiStatusResponse.getHref().replaceFirst("/" + config.getWatchpath(), ""))
+            .filter(s -> !Strings.isNullOrEmpty(s) && !s.endsWith("/"))
+            .collect(Collectors.toList());
+
         /*List<DavResource> list = sardine.list(getFullWatchURL());
         return Lists.newArrayList(
                 Iterables.transform(
@@ -141,46 +141,25 @@ public class WebDavRepository implements Repository {
         public synchronized List<CheckItem> getContent() throws IOException {
             MultiStatusResponse[] responses = doPropFind(getFullWatchURL() + "/" + listName);
             List<MultiStatusResponse> sourceList = Arrays.asList(responses);
-            Collections.sort(sourceList, new Comparator<MultiStatusResponse>() {
-                @Override
-                public int compare(MultiStatusResponse o1, MultiStatusResponse o2) {
-                    String l1 = (String) o1.getProperties(200).get(DavPropertyName.GETLASTMODIFIED).getValue();
-                    String l2 = (String) o2.getProperties(200).get(DavPropertyName.GETLASTMODIFIED).getValue();
-                    return ComparisonChain.start().compare(doParseHttpDate(l1), doParseHttpDate(l2)).result();
-                }
+            sourceList.sort((o1, o2) -> {
+                String l1 = (String) o1.getProperties(200).get(DavPropertyName.GETLASTMODIFIED).getValue();
+                String l2 = (String) o2.getProperties(200).get(DavPropertyName.GETLASTMODIFIED).getValue();
+                return ComparisonChain.start().compare(doParseHttpDate(l1), doParseHttpDate(l2)).result();
             });
-            return FluentIterable.from(sourceList)
-                    .transform(new Function<MultiStatusResponse, String>() {
-                        @Override
-                        public String apply(MultiStatusResponse input) {
-                            return input.getHref()
-                                    .replaceFirst("/" + config.getWatchpath() + "/" + listName + "/", "")
-                                    .replaceAll("^\\/*", "");
-                        }
-                    })
-                    .filter(new Predicate<String>() {
-                        @Override
-                        public boolean apply(String input) {
-                            return !input.isEmpty();
-                        }
-                    })
-                    .transform(new Function<String, CheckItem>() {
-                        @Override
-                        public CheckItem apply(String input) {
-                            try {
-                                String unescaped = URLDecoder.decode(input, Charsets.UTF_8.name());
-                                return CheckItem.fromString(unescaped);
-                            } catch (UnsupportedEncodingException e) {
-                                throw new IllegalStateException(e);
-                            }
-                        }
-                    })
-                    .toSortedList(new Comparator<CheckItem>() {
-                        @Override
-                        public int compare(CheckItem o1, CheckItem o2) {
-                            return ComparisonChain.start().compare(o1.isChecked(), o2.isChecked()).result();
-                        }
-                    });
+            return sourceList.stream().map(input -> input.getHref()
+                    .replaceFirst("/" + config.getWatchpath() + "/" + listName + "/", "")
+                    .replaceAll("^\\/*", "")).filter(input -> !input.isEmpty()).map(input -> {
+                    try {
+                        String unescaped = URLDecoder.decode(input, Charsets.UTF_8.name());
+                        return CheckItem.fromString(unescaped);
+                    } catch (UnsupportedEncodingException e) {
+                        throw new IllegalStateException(e);
+                    }
+                })
+                .sorted((o1, o2) -> ComparisonChain.start()
+                    .compareFalseFirst(o1.isChecked(), o2.isChecked())
+                    .result())
+                .collect(Collectors.toList());
         }
 
         private Date doParseHttpDate(String l1) {

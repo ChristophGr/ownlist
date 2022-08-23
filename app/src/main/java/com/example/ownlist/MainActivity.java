@@ -25,10 +25,30 @@ import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.text.Editable;
-import android.view.*;
+import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.view.View;
+import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
-import android.widget.*;
-import com.example.listsync.*;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.AutoCompleteTextView;
+import android.widget.BaseAdapter;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import com.example.listsync.CheckItem;
+import com.example.listsync.Consumer;
+import com.example.listsync.ListSyncer;
+import com.example.listsync.UpdatingListSyncer;
+import com.example.listsync.WebDavConfiguration;
+import com.example.listsync.WebDavRepository;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

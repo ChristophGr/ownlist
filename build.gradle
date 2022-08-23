@@ -36,6 +36,9 @@ allprojects {
             }
             google()
         }
+        dependencies {
+            classpath 'com.android.tools.build:gradle:7.2.2'
+        }
     }
     ext.libraries = [
             guava: 'com.google.guava:guava:16.+',

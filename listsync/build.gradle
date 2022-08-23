@@ -19,8 +19,8 @@
 
 apply plugin: 'java'
 
-sourceCompatibility=JavaVersion.VERSION_1_7
-targetCompatibility=JavaVersion.VERSION_1_7
+sourceCompatibility=JavaVersion.VERSION_1_8
+targetCompatibility=JavaVersion.VERSION_1_8
 /*
 sourceSets {
     main {
@@ -39,18 +39,16 @@ repositories{
 }
 
 dependencies {
-    compile libraries.guava
-    compile 'org.slf4j:slf4j-api:1.7.5'
-    compile 'commons-io:commons-io:2.4'
-    compile 'javax.servlet:servlet-api:2.5'
-    compile 'org.apache.jackrabbit:jackrabbit-webdav:2.7.3'
-    compile 'org.apache.commons:commons-csv:1.0'
-    testCompile libraries.junit
-    testCompile 'ch.qos.logback:logback-classic:1.0.9'
-    testCompile 'ch.qos.logback:logback-core:1.0.9'
-    testCompile 'org.eclipse.jetty:jetty-server:9.2.3.v20140905'
-    testCompile 'org.eclipse.jetty:jetty-servlet:9.2.3.v20140905'
-    //testCompile 'io.milton:milton-server-ce:2.7.4.4'
+    implementation 'com.google.guava:guava:31.1-android'
+    implementation 'org.slf4j:slf4j-api:1.7.36'
+    implementation 'commons-io:commons-io:2.11.0'
+    implementation 'org.apache.jackrabbit:jackrabbit-webdav:2.7.3'
+    testImplementation libraries.junit
+    testImplementation 'ch.qos.logback:logback-classic:1.2.11'
+    testImplementation 'ch.qos.logback:logback-core:1.2.11'
+    testImplementation 'org.eclipse.jetty:jetty-server:9.2.3.v20140905'
+    testImplementation 'org.eclipse.jetty:jetty-servlet:9.2.3.v20140905'
+    testImplementation 'io.milton:milton-server-ce:2.8.0.3'
 }
 
 test {
